@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">机器猫</string>
+    <string name="mock_chat_title">模拟聊天测试</string>
+    <string name="accessibility_service_description">只在打开 Tinder 聊天时自动读取对方发来的外语消息，并在屏幕上弹出中文翻译小卡片，切出 Tinder 会自动隐藏。</string>
+</resources>

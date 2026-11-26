@@ -1,0 +1,10 @@
+*.iml
+.gradle/
+.idea/
+local.properties
+app/build/
+build/
+app/release-keystore.jks
+release/*.apk
+.DS_Store
+Thumbs.db

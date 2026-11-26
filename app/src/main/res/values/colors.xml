@@ -1,0 +1,17 @@
+<resources>
+    <color name="brand_primary">#FE3C72</color>
+    <color name="brand_primary_dark">#D92559</color>
+    <color name="brand_surface">#FFF5F7</color>
+    <color name="bg_page">#F7F8FA</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="text_primary">#181A20</color>
+    <color name="text_secondary">#666C7A</color>
+    <color name="status_ok_bg">#E9F9EF</color>
+    <color name="status_ok_text">#15803D</color>
+    <color name="status_warn_bg">#FFF4E5</color>
+    <color name="status_warn_text">#B45309</color>
+    <color name="overlay_bg">#EE1C1E26</color>
+    <color name="overlay_item_bg">#FF282B36</color>
+    <color name="overlay_note_bg">#33F59E0B</color>
+    <color name="overlay_note_text">#FFFBBF24</color>
+</resources>
