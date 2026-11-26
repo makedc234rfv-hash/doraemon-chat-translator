@@ -2,11 +2,12 @@
 
 **简体中文** | **ภาษาไทย** | **English**
 
-一款专为 Android 手机设计的 Tinder 聊天实时 AI 翻译悬浮卡片工具。无需来回切软件，对方一发外语消息就原地弹出自然口语翻译，支持 **中文 / ภาษาไทย / English / 日本語 / 한국어** 五种界面与翻译语言自由切换。
+一款专为 Tinder 跨语言聊天设计的实时 AI 翻译工具，同时支持 **Android（自动悬浮卡片）** 与 **iPhone（免安装快捷指令，轻敲背面弹翻译）**，支持 **中文 / ภาษาไทย / English / 日本語 / 한국어** 五种语言自由切换。
 
-> **Direct APK Download / ดาวน์โหลดไฟล์ติดตั้ง (.apk) / 直接下载安装包**
-> 👉 点击直接下载 / กดเพื่อดาวน์โหลดไฟล์ติดตั้งทันที: **[Doraemon-v1.1.0.apk](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-v1.1.0.apk)**
-> （也可查看所有版本：[Releases](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest)）
+> **Direct Download / ดาวน์โหลดทันที / 直接下载**
+> - 🤖 **Android 安装包 (.apk)** 👉 **[Doraemon-v1.1.0.apk](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-v1.1.0.apk)**
+> - 🍎 **iPhone 苹果快捷指令（免安装、免费永久有效）** 👉 **[Doraemon-Gemini.shortcut](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-Gemini.shortcut)** | **[OpenAI 视觉版](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-OpenAI-Vision.shortcut)** | **[DeepSeek 文字版](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-Text-DeepSeek.shortcut)**（[查看苹果详细图文步骤](./ios-shortcuts/README.md)）
+> - 📦 查看全部版本：**[Releases](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest)**
 
 ---
 
@@ -24,6 +25,11 @@
    - *หมายเหตุสำหรับ Android 13 ขึ้นไป (เช่น Google Pixel / Samsung)*: หากระบบขึ้นว่า **「การตั้งค่าที่จำกัด (Restricted settings)」** ให้กดปุ่ม **「ข้อมูลแอป」** → แตะจุด 3 จุดมุมขวาบน → กด **「อนุญาตการตั้งค่าที่จำกัด」** แล้วกลับมาเปิดสวิตช์อีกครั้ง
 2. **ใส่คีย์ AI**: เลือกผู้ให้บริการที่ต้องการ (**Gemini / DeepSeek / OpenAI / กำหนดเอง**) วาง API Key แล้วกด **「บันทึกและทดสอบแปล」**
 3. เมื่อเข้าหน้าแชทใน Tinder หากอีกฝ่ายส่งข้อความภาษาจีน อังกฤษ หรือภาษาอื่นเข้ามา การ์ดแปลภาษาไทยจะเด้งขึ้นมาด้านบนอัตโนมัติ (ปรับขนาดการ์ด **เล็ก / กลาง / ใหญ่** หรือกด **พับเก็บ** ได้ตลอดเวลา)
+
+### 🍎 สำหรับผู้ใช้ iPhone (ไม่ต้องติดตั้งแอป ฟรีถาวร)
+1. เปิดลิงก์นี้ด้วย **Safari** บน iPhone 👉 **[Doraemon-Gemini.shortcut](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-Gemini.shortcut)** แล้วกด **เพิ่มคำสั่งลัด** พร้อมวาง Gemini API Key และพิมพ์ภาษาเป้าหมายว่า **`ภาษาไทย`**
+2. ไปที่ **การตั้งค่า → การช่วยการเข้าถึง → สัมผัส → แตะด้านหลัง → แตะสองครั้ง** แล้วเลือก **机器猫-截屏翻译(Gemini)**
+3. เมื่อแชทใน Tinder แค่**แตะด้านหลังเครื่อง 2 ครั้ง** คำแปลภาษาไทยจะเด้งขึ้นมาทันทีโดยไม่บันทึกรูปลงอัลบั้ม ([อ่านคู่มือ iPhone ฉบับเต็ม](./ios-shortcuts/README.md))
 
 ### 🔒 ความปลอดภัยและความเป็นส่วนตัว (Safety & Privacy)
 แอปนี้สร้างขึ้น **เพื่อช่วยแปลภาษาในแชทให้คุยกันเข้าใจง่ายขึ้นเท่านั้น** และเปิดเผยซอร์สโค้ดทั้งหมดบน GitHub:
@@ -43,6 +49,11 @@
 4. 填上你的 AI 密钥（支持 Gemini / DeepSeek / OpenAI / 自定义兼容接口），点「**保存并测试翻译**」通过即可。
 5. 支持「**打开模拟聊天测试**」先看效果；悬浮卡片支持拖拽、一键切换 **小 / 中 / 大** 尺寸，并自动适配不同手机屏幕。
 
+### 🍎 苹果 iPhone 使用方法（免安装、免费永久有效）
+1. 用 iPhone 自带 **Safari 浏览器** 打开 **[Doraemon-Gemini.shortcut](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-Gemini.shortcut)**（或 OpenAI / DeepSeek 版），按弹出向导填上你的 API Key 和目标语言并添加。
+2. 打开 iPhone **设置 → 辅助功能 → 触控 → 轻点背面 → 轻点两下**，选中 **机器猫-截屏翻译(Gemini)**。
+3. 在 Tinder 聊天时**轻敲两下手机背面**，1～2 秒原地弹出翻译，截图不存相册（[查看苹果完整图文教程](./ios-shortcuts/README.md)）。
+
 ### 🔒 隐私与安全范围说明
 本软件为开源工具，**仅用于 Tinder 跨语言聊天翻译，方便日常沟通**：
 - ✅ **绝不读取通讯录**、相册、短信、通话记录、定位或任何账号密码。
@@ -61,6 +72,11 @@
 2. Open **机器猫**, select your preferred language at the top.
 3. Enable **Accessibility Service** for **机器猫** (on Android 13+, tap **App Info** → top-right 3 dots → **Allow restricted settings** first).
 4. Enter your AI API key (**Gemini / DeepSeek / OpenAI / Custom**) and tap **Save & Test**.
+
+### 🍎 iPhone Setup (Zero App Install, Free Forever)
+1. Open **[Doraemon-Gemini.shortcut](https://github.com/makedc234rfv-hash/doraemon-chat-translator/releases/latest/download/Doraemon-Gemini.shortcut)** in **iPhone Safari**, enter your API key and target language in the setup prompt, and tap **Add Shortcut**.
+2. Go to **Settings → Accessibility → Touch → Back Tap → Double Tap** and choose **机器猫-截屏翻译(Gemini)**.
+3. Double-tap the back of your iPhone inside Tinder chat for instant popup translation without saving screenshots ([Full iPhone Guide](./ios-shortcuts/README.md)).
 
 ### 🔒 Privacy & Safety Scope
 - **Built solely for Tinder chat translation** to make cross-language communication effortless.

@@ -1,0 +1,77 @@
+/*
+ * 机器猫 (Doraemon Chat Translator) - iOS Shortcut (DeepSeek / Text OCR Edition)
+ *
+ * Uses Apple on-device text recognition (OCR) to extract chat text from the screen
+ * and sends ONLY text to DeepSeek or any OpenAI-compatible text API (no images uploaded).
+ */
+
+#define color teal
+#define glyph chatBubble
+#define name 机器猫-文字翻译(DeepSeek)
+
+#question apiKey "请粘贴 DeepSeek 或兼容接口 API Key / วาง API Key" ""
+#question targetLang "翻译目标语言 (简体中文 / ภาษาไทย / English / 日本語 / 한국어)" "简体中文"
+#question apiEndpoint "接口地址 / API Endpoint" "https://api.deepseek.com/chat/completions"
+#question modelName "模型名称 / Model Name" "deepseek-chat"
+
+if !apiKey {
+    alert("请先在「快捷指令」里长按本指令 → 点「编辑」，填入你的 API Key。\n\nกรุณาแก้ไขคำสั่งลัดแล้ววาง API Key ก่อนใช้งาน", "🐱 机器猫提示")
+} else {
+    const screenshot = takeScreenshot()
+    const extracted = extractImageText(screenshot)
+
+    if !extracted {
+        alert("未在屏幕上识别到文字。若对方消息为泰语且当前系统版本无法离线识别，请改用「机器猫-截屏翻译(Gemini)」。", "🐱 机器猫提示")
+    } else {
+        const sysPrompt = "You are a natural, fluent dating-chat translator for Tinder. The user provides OCR text from a Tinder chat screen. Ignore status bar time, battery, app headers, input placeholders, and already-in-target-language lines. Translate the latest 1 to 4 foreign chat messages into natural conversational {targetLang}. Format each as:\n• Original -> Translation\nIf there is slang, abbreviation, or flirting nuance, add a short 1-line note starting with 💡 in {targetLang}. Plain text only."
+
+        const response = jsonRequest(
+            "{apiEndpoint}",
+            "POST",
+            {
+                "model": "{modelName}",
+                "temperature": 0.3,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "{sysPrompt}"
+                    },
+                    {
+                        "role": "user",
+                        "content": "{extracted}"
+                    }
+                ]
+            },
+            {
+                "Authorization": "Bearer {apiKey}",
+                "Content-Type": "application/json"
+            }
+        )
+
+        const respDict = getDictionary(response)
+        const choices = getValue(respDict, "choices")
+
+        if choices {
+            const firstChoiceRaw = getFirstItem(choices)
+            const firstChoice = getDictionary(firstChoiceRaw)
+            const msgRaw = getValue(firstChoice, "message")
+            const msg = getDictionary(msgRaw)
+            const translated = getValue(msg, "content")
+
+            if translated {
+                alert("{translated}", "🐱 机器猫翻译")
+            } else {
+                alert("未获取到翻译内容，请稍后再试。\n\n{response}", "🐱 机器猫提示")
+            }
+        } else {
+            const errRaw = getValue(respDict, "error")
+            if errRaw {
+                const errDict = getDictionary(errRaw)
+                const errMsg = getValue(errDict, "message")
+                alert("翻译失败 / Translation failed:\n{errMsg}", "🐱 机器猫提示")
+            } else {
+                alert("请求失败，请检查网络、接口地址或 API Key。\n\n{response}", "🐱 机器猫提示")
+            }
+        }
+    }
+}

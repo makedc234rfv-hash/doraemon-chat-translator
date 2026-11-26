@@ -1,0 +1,85 @@
+/*
+ * 机器猫 (Doraemon Chat Translator) - iOS Shortcut (OpenAI / Compatible Vision Edition)
+ *
+ * Works with OpenAI (gpt-4o-mini) or any OpenAI-compatible vision API endpoint.
+ * Captures the current screen without saving to Photos, strips EXIF metadata,
+ * and shows natural conversational translation in an on-screen popup.
+ */
+
+#define color purple
+#define glyph cat
+#define name 机器猫-截屏翻译(OpenAI)
+
+#question apiKey "请粘贴 OpenAI 或兼容接口 API Key / วาง API Key" ""
+#question targetLang "翻译目标语言 (简体中文 / ภาษาไทย / English / 日本語 / 한국어)" "简体中文"
+#question apiEndpoint "接口地址 / API Endpoint" "https://api.openai.com/v1/chat/completions"
+#question modelName "视觉模型名 / Vision Model" "gpt-4o-mini"
+
+if !apiKey {
+    alert("请先在「快捷指令」里长按本指令 → 点「编辑」，填入你的 API Key。\n\nกรุณาแก้ไขคำสั่งลัดแล้ววาง API Key ก่อนใช้งาน", "🐱 机器猫提示")
+} else {
+    const screenshot = takeScreenshot()
+    const resized = resizeImageByLongestEdge(screenshot, "1080")
+    const jpeg = convertToJPEG(resized, nil, false)
+    const rawBase64 = base64Encode(jpeg)
+    const b64NoLF = replaceText("\n", "", rawBase64)
+    const cleanBase64 = replaceText("\r", "", b64NoLF)
+
+    const prompt = "You are a natural, fluent dating-chat translator for Tinder screenshots. Look at this screenshot and translate ONLY the match's latest 1 to 4 incoming foreign messages (left-side bubbles; ignore status bar, timestamps, UI buttons, and the user's own right-side messages) into natural conversational {targetLang}. Format each message clearly as:\n• Original -> Translation\nIf there is slang, abbreviation, or flirting nuance, add a short 1-line note starting with 💡 in {targetLang}. If there are no foreign incoming messages visible, say so briefly in {targetLang}. Plain text only, concise for a mobile popup."
+
+    const response = jsonRequest(
+        "{apiEndpoint}",
+        "POST",
+        {
+            "model": "{modelName}",
+            "temperature": 0.3,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "{prompt}"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64,{cleanBase64}"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "Authorization": "Bearer {apiKey}",
+            "Content-Type": "application/json"
+        }
+    )
+
+    const respDict = getDictionary(response)
+    const choices = getValue(respDict, "choices")
+
+    if choices {
+        const firstChoiceRaw = getFirstItem(choices)
+        const firstChoice = getDictionary(firstChoiceRaw)
+        const msgRaw = getValue(firstChoice, "message")
+        const msg = getDictionary(msgRaw)
+        const translated = getValue(msg, "content")
+
+        if translated {
+            alert("{translated}", "🐱 机器猫翻译")
+        } else {
+            alert("未获取到翻译内容，请稍后再试。\n\n{response}", "🐱 机器猫提示")
+        }
+    } else {
+        const errRaw = getValue(respDict, "error")
+        if errRaw {
+            const errDict = getDictionary(errRaw)
+            const errMsg = getValue(errDict, "message")
+            alert("翻译失败 / Translation failed:\n{errMsg}", "🐱 机器猫提示")
+        } else {
+            alert("请求失败，请检查网络、接口地址或 API Key。\n\n{response}", "🐱 机器猫提示")
+        }
+    }
+}

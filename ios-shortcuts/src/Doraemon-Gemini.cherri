@@ -1,0 +1,89 @@
+/*
+ * 机器猫 (Doraemon Chat Translator) - iOS Shortcut (Gemini Vision Edition)
+ *
+ * Captures the current Tinder chat screen (never saved to Photos), strips EXIF metadata,
+ * sends the compressed image directly to your own Gemini API key, and pops up a natural
+ * conversational translation of the match's latest incoming messages right over Tinder.
+ */
+
+#define color blue
+#define glyph cat
+#define name 机器猫-截屏翻译(Gemini)
+
+#question apiKey "请粘贴你的 Gemini API Key / วาง Gemini API Key" ""
+#question targetLang "翻译目标语言 (简体中文 / ภาษาไทย / English / 日本語 / 한국어)" "简体中文"
+#question modelName "模型名称 / Model Name (默认 gemini-2.5-flash)" "gemini-2.5-flash"
+
+if !apiKey {
+    alert("请先在「快捷指令」里长按本指令 → 点「编辑」，填入你的 Gemini API Key。\n\nกรุณาแก้ไขคำสั่งลัดแล้ววาง Gemini API Key ก่อนใช้งาน", "🐱 机器猫提示")
+} else {
+    const screenshot = takeScreenshot()
+    const resized = resizeImageByLongestEdge(screenshot, "1080")
+    const jpeg = convertToJPEG(resized, nil, false)
+    const rawBase64 = base64Encode(jpeg)
+    const b64NoLF = replaceText("\n", "", rawBase64)
+    const cleanBase64 = replaceText("\r", "", b64NoLF)
+
+    const prompt = "You are a natural, fluent dating-chat translator for Tinder screenshots. Look at this screenshot and translate ONLY the match's latest 1 to 4 incoming foreign messages (left-side bubbles; ignore status bar, timestamps, UI buttons, and the user's own right-side messages) into natural conversational {targetLang}. Format each message clearly as:\n• Original -> Translation\nIf there is slang, abbreviation, or flirting nuance, add a short 1-line note starting with 💡 in {targetLang}. If there are no foreign incoming messages visible, say so briefly in {targetLang}. Plain text only, concise for a mobile popup."
+
+    const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent"
+
+    const response = jsonRequest(
+        "{endpoint}",
+        "POST",
+        {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": "{prompt}"
+                        },
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": "{cleanBase64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.3
+            }
+        },
+        {
+            "x-goog-api-key": "{apiKey}",
+            "Content-Type": "application/json"
+        }
+    )
+
+    const respDict = getDictionary(response)
+    const candidates = getValue(respDict, "candidates")
+
+    if candidates {
+        const firstCandRaw = getFirstItem(candidates)
+        const firstCand = getDictionary(firstCandRaw)
+        const contentRaw = getValue(firstCand, "content")
+        const content = getDictionary(contentRaw)
+        const parts = getValue(content, "parts")
+        const firstPartRaw = getFirstItem(parts)
+        const firstPart = getDictionary(firstPartRaw)
+        const translated = getValue(firstPart, "text")
+
+        if translated {
+            alert("{translated}", "🐱 机器猫翻译")
+        } else {
+            alert("未获取到翻译内容，请稍后再试。\n\n{response}", "🐱 机器猫提示")
+        }
+    } else {
+        const errRaw = getValue(respDict, "error")
+        if errRaw {
+            const errDict = getDictionary(errRaw)
+            const errMsg = getValue(errDict, "message")
+            alert("翻译失败 / Translation failed:\n{errMsg}", "🐱 机器猫提示")
+        } else {
+            alert("请求失败，请检查网络或 Gemini API Key 是否正确。\n\n{response}", "🐱 机器猫提示")
+        }
+    }
+}
