@@ -1,17 +1,24 @@
 package com.liaoyi.tindertranslator.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
+import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.widget.Toast
 import com.liaoyi.tindertranslator.data.AppLanguage
 import com.liaoyi.tindertranslator.data.AppStrings
 import com.liaoyi.tindertranslator.data.SettingsStore
 import com.liaoyi.tindertranslator.data.TranslationResult
 import com.liaoyi.tindertranslator.overlay.DisplayItem
 import com.liaoyi.tindertranslator.overlay.FloatingTranslationController
+import com.liaoyi.tindertranslator.overlay.PolishUiState
 import com.liaoyi.tindertranslator.parser.AutoTriggerTracker
 import com.liaoyi.tindertranslator.parser.ChatMessage
 import com.liaoyi.tindertranslator.parser.ChatMessageParser
@@ -37,11 +44,13 @@ class TinderAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var debounceJob: Job? = null
     private var translateJob: Job? = null
+    private var polishJob: Job? = null
 
     private var activeTargetPackage: String? = null
     private var lastLanguage: AppLanguage? = null
     private var lastDisplayMessages: List<ChatMessage> = emptyList()
     private var lastContextMessages: List<ChatMessage> = emptyList()
+    private var polishState: PolishUiState = PolishUiState()
     private val inFlightIds = mutableSetOf<String>()
 
     override fun onServiceConnected() {
@@ -54,7 +63,12 @@ class TinderAccessibilityService : AccessibilityService() {
             onRefreshClick = { triggerScan(forceExpand = true, ignoreCache = true) },
             onCollapseClick = ::handleCollapseClick,
             onExpandClick = ::handleExpandClick,
-            onOpenSettingsClick = ::openAppSettings
+            onOpenSettingsClick = ::openAppSettings,
+            onPolishReplyClick = ::handlePolishReplyClick,
+            onCycleReplyLangClick = ::handleCycleReplyLangClick,
+            onClosePolishClick = ::handleClosePolishClick,
+            onFillReplyClick = ::handleFillReplyClick,
+            onCopyReplyClick = ::handleCopyReplyClick
         )
         isRunning = true
         instance = this
@@ -88,6 +102,7 @@ class TinderAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         debounceJob?.cancel()
         translateJob?.cancel()
+        polishJob?.cancel()
         if (::overlayController.isInitialized) {
             overlayController.hideAll()
         }
@@ -99,6 +114,7 @@ class TinderAccessibilityService : AccessibilityService() {
         onStatusChanged?.invoke(false)
         debounceJob?.cancel()
         translateJob?.cancel()
+        polishJob?.cancel()
         if (::overlayController.isInitialized) {
             overlayController.hideAll()
         }
@@ -144,9 +160,11 @@ class TinderAccessibilityService : AccessibilityService() {
         activeTargetPackage = null
         debounceJob?.cancel()
         translateJob?.cancel()
+        polishJob?.cancel()
         inFlightIds.clear()
         lastDisplayMessages = emptyList()
         lastContextMessages = emptyList()
+        polishState = PolishUiState()
         triggerTracker.resetSession()
         overlayController.hideAll()
     }
@@ -198,21 +216,15 @@ class TinderAccessibilityService : AccessibilityService() {
         lastDisplayMessages = decision.displayMessages
 
         if (decision.displayMessages.isEmpty()) {
-            if (forceExpand) {
-                overlayController.showExpanded(
-                    items = emptyList(),
-                    language = settings.language,
-                    overlaySize = settings.overlaySize,
-                    autoPopup = settings.autoPopup,
-                    isLoading = false
-                )
+            if (forceExpand || polishState.visible) {
+                renderCurrentCard(isLoading = false)
             } else {
                 overlayController.showCollapsedPill(settings.language, hasUnread = false)
             }
             return
         }
 
-        val shouldShowExpanded = forceExpand || decision.shouldAutoPopup || !triggerTracker.isCollapsedByUser
+        val shouldShowExpanded = forceExpand || polishState.visible || decision.shouldAutoPopup || !triggerTracker.isCollapsedByUser
 
         val missingIds = decision.displayMessages
             .filter { msg ->
@@ -292,6 +304,110 @@ class TinderAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun handlePolishReplyClick() {
+        val targetPkg = activeTargetPackage ?: return
+        val settings = settingsStore.loadSettings()
+        val uiStrings = AppStrings.of(settings.language)
+        triggerTracker.markExpandedByUser()
+
+        if (!settings.hasApiKey()) {
+            polishState = PolishUiState(visible = true, message = uiStrings.overlayMissingKey)
+            renderCurrentCard(isLoading = false, errorMessage = uiStrings.overlayMissingKey, showSettingsAction = true)
+            return
+        }
+
+        val targetRoot = findTargetRootNode(targetPkg)
+        val screenHeight = resources.displayMetrics.heightPixels
+        val composer = targetRoot?.let { findComposerNode(it, screenHeight) }
+        val draft = composer?.let { readComposerDraftText(it) }.orEmpty()
+
+        if (draft.isEmpty()) {
+            polishState = PolishUiState(visible = true, message = uiStrings.polishEmptyInput)
+            renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+            return
+        }
+
+        polishState = PolishUiState(visible = true, isLoading = true)
+        renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+
+        polishJob?.cancel()
+        polishJob = serviceScope.launch {
+            val result = aiTranslator.polishReply(
+                draftText = draft,
+                contextMessages = lastContextMessages,
+                settings = settings
+            )
+            if (activeTargetPackage == null) return@launch
+
+            result.fold(
+                onSuccess = { polished ->
+                    polishState = PolishUiState(visible = true, isLoading = false, result = polished)
+                    renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+                },
+                onFailure = { err ->
+                    polishState = PolishUiState(
+                        visible = true,
+                        isLoading = false,
+                        message = err.message ?: uiStrings.errBadFormat
+                    )
+                    renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+                }
+            )
+        }
+    }
+
+    private fun handleCycleReplyLangClick() {
+        val settings = settingsStore.loadSettings()
+        settingsStore.setReplyLanguage(settings.replyLanguage.next())
+        renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+    }
+
+    private fun handleClosePolishClick() {
+        polishJob?.cancel()
+        polishState = PolishUiState(visible = false)
+        renderCurrentCard(isLoading = inFlightIds.isNotEmpty())
+    }
+
+    private fun handleFillReplyClick(text: String) {
+        val settings = settingsStore.loadSettings()
+        val uiStrings = AppStrings.of(settings.language)
+        val targetPkg = activeTargetPackage
+        val targetRoot = targetPkg?.let { findTargetRootNode(it) }
+        val composer = targetRoot?.let { findComposerNode(it, resources.displayMetrics.heightPixels) }
+
+        var filled = false
+        if (composer != null) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            filled = runCatching {
+                composer.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            }.getOrDefault(false)
+        }
+
+        if (filled) {
+            polishState = PolishUiState(visible = false)
+            triggerTracker.markCollapsedByUser()
+            overlayController.showCollapsedPill(settings.language, hasUnread = false)
+            Toast.makeText(this, uiStrings.polishFilledToast, Toast.LENGTH_SHORT).show()
+        } else {
+            copyToClipboard(text)
+            Toast.makeText(this, uiStrings.polishCopiedToast, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleCopyReplyClick(text: String) {
+        val settings = settingsStore.loadSettings()
+        val uiStrings = AppStrings.of(settings.language)
+        copyToClipboard(text)
+        Toast.makeText(this, uiStrings.polishCopiedToast, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun copyToClipboard(text: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        cm.setPrimaryClip(ClipData.newPlainText("DoraemonReply", text))
+    }
+
     private fun renderCurrentCard(
         isLoading: Boolean,
         errorMessage: String? = null,
@@ -313,11 +429,13 @@ class TinderAccessibilityService : AccessibilityService() {
         overlayController.showExpanded(
             items = displayItems,
             language = settings.language,
+            replyLanguage = settings.replyLanguage,
             overlaySize = settings.overlaySize,
             autoPopup = settings.autoPopup,
             isLoading = isLoading,
             errorMessage = errorMessage,
-            showSettingsAction = showSettingsAction
+            showSettingsAction = showSettingsAction,
+            polishState = polishState
         )
     }
 
@@ -335,6 +453,7 @@ class TinderAccessibilityService : AccessibilityService() {
 
     private fun handleCollapseClick() {
         val settings = settingsStore.loadSettings()
+        polishState = PolishUiState(visible = false)
         triggerTracker.markCollapsedByUser()
         overlayController.showCollapsedPill(settings.language, hasUnread = false)
     }
@@ -362,6 +481,46 @@ class TinderAccessibilityService : AccessibilityService() {
         }
         val active = runCatching { rootInActiveWindow }.getOrNull()
         return if (active?.packageName?.toString() == targetPkg) active else null
+    }
+
+    private fun findComposerNode(root: AccessibilityNodeInfo, screenHeight: Int): AccessibilityNodeInfo? {
+        val minTop = (screenHeight * 0.22f).toInt()
+        val rect = Rect()
+        var bestNode: AccessibilityNodeInfo? = null
+        var bestTop = -1
+
+        fun search(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 30) return
+            if (!node.isVisibleToUser) return
+
+            val cls = node.className?.toString().orEmpty()
+            if (node.isEditable || cls.endsWith("EditText")) {
+                node.getBoundsInScreen(rect)
+                if (rect.top >= minTop && rect.height() > 0 && rect.top >= bestTop) {
+                    bestNode = node
+                    bestTop = rect.top
+                }
+            }
+
+            val count = node.childCount
+            for (i in 0 until count) {
+                val child = runCatching { node.getChild(i) }.getOrNull()
+                if (child != null) search(child, depth + 1)
+            }
+        }
+
+        search(root, 0)
+        return bestNode
+    }
+
+    private fun readComposerDraftText(node: AccessibilityNodeInfo): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && node.isShowingHintText) {
+            return ""
+        }
+        val text = node.text?.toString().orEmpty().trim()
+        val lower = text.lowercase()
+        if (lower in PLACEHOLDER_STRINGS) return ""
+        return text
     }
 
     private fun collectScreenNodes(root: AccessibilityNodeInfo): List<ScreenNode> {
@@ -414,6 +573,11 @@ class TinderAccessibilityService : AccessibilityService() {
     companion object {
         const val TINDER_PACKAGE = "com.tinder"
         private const val SCAN_DEBOUNCE_MS = 380L
+
+        private val PLACEHOLDER_STRINGS = setOf(
+            "type a message", "type a message...", "say something nice",
+            "say something nice...", "输入消息", "输入消息...", "พิมพ์ข้อความ..."
+        )
 
         private val IGNORED_PACKAGES = setOf(
             "com.android.systemui",

@@ -3,9 +3,14 @@ package com.liaoyi.tindertranslator.translator
 import com.liaoyi.tindertranslator.data.AiProvider
 import com.liaoyi.tindertranslator.data.AppLanguage
 import com.liaoyi.tindertranslator.data.AppStrings
+import com.liaoyi.tindertranslator.data.ReplyGender
+import com.liaoyi.tindertranslator.data.ReplyLanguage
+import com.liaoyi.tindertranslator.data.ReplyOption
+import com.liaoyi.tindertranslator.data.ReplyPolishResult
 import com.liaoyi.tindertranslator.data.TranslationResult
 import com.liaoyi.tindertranslator.data.TranslatorSettings
 import com.liaoyi.tindertranslator.parser.ChatMessage
+import com.liaoyi.tindertranslator.parser.LanguageDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -83,6 +88,69 @@ class AiTranslator(
             settings = settings
         ).mapCatching { map ->
             map[sample.id] ?: throw IOException(AppStrings.of(settings.language).errBadFormat)
+        }
+    }
+
+    /**
+     * Turns a user's draft reply (whether written in their native language OR stiff machine-translated
+     * Thai/English/etc.) into 2 natural, native-sounding dating-chat options with back-translation.
+     */
+    suspend fun polishReply(
+        draftText: String,
+        contextMessages: List<ChatMessage>,
+        settings: TranslatorSettings
+    ): Result<ReplyPolishResult> = withContext(Dispatchers.IO) {
+        val textRes = AppStrings.of(settings.language)
+        if (!settings.hasApiKey()) {
+            return@withContext Result.failure(IllegalStateException(textRes.errMissingKey))
+        }
+        val cleanDraft = draftText.trim()
+        if (cleanDraft.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException(textRes.polishEmptyInput))
+        }
+
+        val resolvedTarget = if (settings.replyLanguage == ReplyLanguage.AUTO) {
+            LanguageDetector.detectReplyLanguage(
+                recentIncomingTexts = contextMessages.filter { it.isIncoming }.map { it.text },
+                fallbackUiLanguage = settings.language
+            )
+        } else {
+            settings.replyLanguage
+        }
+
+        val systemPrompt = buildReplyPolishSystemPrompt(
+            targetLang = resolvedTarget,
+            userUiLang = settings.language,
+            gender = settings.replyGender
+        )
+        val userPrompt = buildReplyPolishUserPrompt(cleanDraft, contextMessages)
+
+        try {
+            val rawText = when (settings.provider) {
+                AiProvider.GEMINI -> callGemini(systemPrompt, userPrompt, settings)
+                AiProvider.DEEPSEEK, AiProvider.OPENAI, AiProvider.CUSTOM ->
+                    callOpenAiCompatible(systemPrompt, userPrompt, settings)
+            }
+            val options = parseReplyPolishJson(rawText, settings.language)
+            if (options.isEmpty()) {
+                Result.failure(IOException(textRes.errBadFormat))
+            } else {
+                Result.success(
+                    ReplyPolishResult(
+                        sourceInput = cleanDraft,
+                        targetLanguage = resolvedTarget,
+                        options = options
+                    )
+                )
+            }
+        } catch (e: ApiException) {
+            Result.failure(e)
+        } catch (e: SocketTimeoutException) {
+            Result.failure(IOException(textRes.errTimeout, e))
+        } catch (e: UnknownHostException) {
+            Result.failure(IOException(textRes.errNetwork, e))
+        } catch (e: Exception) {
+            Result.failure(IOException(textRes.errGeneric(e.message ?: ""), e))
         }
     }
 
@@ -287,6 +355,95 @@ Rules:
             sb.append("id=$idx: ${msg.text}\n")
         }
         return sb.toString()
+    }
+
+    internal fun buildReplyPolishSystemPrompt(
+        targetLang: ReplyLanguage,
+        userUiLang: AppLanguage,
+        gender: ReplyGender
+    ): String {
+        val thaiNuance = if (targetLang == ReplyLanguage.TH) {
+            val genderHint = when (gender) {
+                ReplyGender.MALE -> "Speaker is male: use natural male casual Thai particles like ครับ / นะครับ / นะ / อะ / เลย where fitting, and friendly pronouns (เรา/เธอ or omit pronoun naturally). NEVER use ค่ะ/คะ, NEVER use stiff textbook ฉัน/คุณ."
+                ReplyGender.FEMALE -> "Speaker is female: use natural female casual Thai particles like ค่ะ / คะ / นะคะ / นะ / อะ / เลย where fitting, and friendly pronouns (เรา/เธอ or omit pronoun naturally). NEVER use ครับ, NEVER use stiff textbook ดิฉัน/คุณ."
+                ReplyGender.NEUTRAL -> "Use relaxed, gender-neutral casual Thai particles like นะ / อะ / เลย / จัง / 555 where fitting, avoiding stiff textbook ฉัน/คุณ."
+            }
+            "\nSpecial Thai rules: $genderHint Make it read like how a real young Thai person texts on Tinder/LINE, NOT Google Translate."
+        } else {
+            ""
+        }
+
+        val labels = when (userUiLang) {
+            AppLanguage.ZH -> "\"自然地道\" and \"轻松暖一点\""
+            AppLanguage.TH -> "\"ธรรมชาติ\" and \"น่ารักเป็นกันเอง\""
+            AppLanguage.JA -> "\"自然\" and \"少し親しみやすく\""
+            AppLanguage.KO -> "\"자연스럽게\" and \"조금 더 다정하게\""
+            AppLanguage.EN -> "\"Natural\" and \"Warm & Playful\""
+        }
+
+        return """
+You are a native dating-chat coach who turns stiff machine translations or native-language drafts into effortless, authentic ${targetLang.aiName} for Tinder chat.
+Rules:
+1. The user's draft may be written in their own language OR already machine-translated into stiff/awkward ${targetLang.aiName}. Rewrite it so it sounds 100% natural, warm, and genuinely texted by a native speaker.$thaiNuance
+2. Return exactly 2 options:
+   - Option 1 ($labels - first label): natural, smooth everyday texting style.
+   - Option 2 ($labels - second label): slightly warmer, lighter, or playfully charming while keeping the exact same meaning.
+3. For each option, provide "back" = an accurate back-translation into ${userUiLang.aiTargetName} so the user knows the exact tone before sending.
+4. Keep replies concise and chat-length (no essays, no quotes around the message).
+5. Output ONLY valid JSON in this exact format:
+{"options":[{"style":"...","text":"...","back":"..."},{"style":"...","text":"...","back":"..."}]}
+        """.trimIndent()
+    }
+
+    private fun buildReplyPolishUserPrompt(
+        draftText: String,
+        contextMessages: List<ChatMessage>
+    ): String {
+        val sb = StringBuilder()
+        if (contextMessages.isNotEmpty()) {
+            sb.append("Recent Tinder chat context:\n")
+            for (msg in contextMessages.takeLast(5)) {
+                val role = if (msg.isIncoming) "Match" else "Me"
+                sb.append("[$role] ${msg.text}\n")
+            }
+            sb.append("\n")
+        }
+        sb.append("User draft to translate/polish naturally:\n")
+        sb.append(draftText)
+        return sb.toString()
+    }
+
+    internal fun parseReplyPolishJson(
+        rawText: String,
+        userUiLang: AppLanguage
+    ): List<ReplyOption> {
+        val cleaned = extractJsonBlock(rawText)
+        val out = mutableListOf<ReplyOption>()
+        val fallbackLabel = when (userUiLang) {
+            AppLanguage.ZH -> "自然地道"
+            AppLanguage.TH -> "ธรรมชาติ"
+            AppLanguage.JA -> "自然"
+            AppLanguage.KO -> "자연스럽게"
+            AppLanguage.EN -> "Natural"
+        }
+
+        runCatching {
+            val root = JSONObject(cleaned)
+            val arr = root.optJSONArray("options")
+                ?: root.optJSONArray("replies")
+                ?: return@runCatching
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val text = obj.optString("text").trim()
+                    .ifEmpty { obj.optString("reply").trim() }
+                if (text.isEmpty()) continue
+                val style = obj.optString("style").trim().ifEmpty { fallbackLabel }
+                val back = obj.optString("back").trim()
+                    .ifEmpty { obj.optString("meaning").trim() }
+                out.add(ReplyOption(styleLabel = style, text = text, backTranslation = back))
+            }
+        }
+        return out.take(3)
     }
 
     private fun mapHttpError(code: Int, body: String, language: AppLanguage): ApiException {

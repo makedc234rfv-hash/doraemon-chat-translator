@@ -44,6 +44,38 @@ enum class AppLanguage(
     }
 }
 
+enum class ReplyLanguage(val code: String, val aiName: String, val shortLabel: String) {
+    AUTO("auto", "", "Auto"),
+    TH("th", "natural, warm everyday Thai (ภาษาไทย)", "ไทย"),
+    EN("en", "natural casual English", "EN"),
+    ZH("zh", "自然口语化的简体中文", "中文"),
+    JA("ja", "自然で親しみやすい日本語", "日本語"),
+    KO("ko", "자연스럽고 친근한 한국어", "한국어");
+
+    fun next(): ReplyLanguage {
+        val list = entries
+        return list[(list.indexOf(this) + 1) % list.size]
+    }
+
+    companion object {
+        fun fromCode(code: String?): ReplyLanguage {
+            return entries.firstOrNull { it.code == code } ?: AUTO
+        }
+    }
+}
+
+enum class ReplyGender(val code: String) {
+    MALE("male"),
+    FEMALE("female"),
+    NEUTRAL("neutral");
+
+    companion object {
+        fun fromCode(code: String?): ReplyGender {
+            return entries.firstOrNull { it.code == code } ?: MALE
+        }
+    }
+}
+
 enum class OverlaySize(val level: Int, val heightRatio: Float, val fontScale: Float) {
     SMALL(0, 0.25f, 0.88f),
     MEDIUM(1, 0.33f, 1.0f),
@@ -105,6 +137,8 @@ data class TranslatorSettings(
     val explainSlang: Boolean = true,
     val showMyMessages: Boolean = false,
     val overlaySize: OverlaySize = OverlaySize.MEDIUM,
+    val replyLanguage: ReplyLanguage = ReplyLanguage.AUTO,
+    val replyGender: ReplyGender = ReplyGender.MALE,
     val maxMessages: Int = 5
 ) {
     fun effectiveModel(): String = model.trim().ifEmpty { provider.defaultModel }
@@ -124,3 +158,15 @@ data class TranslationResult(
 ) {
     val chinese: String get() = translated
 }
+
+data class ReplyOption(
+    val styleLabel: String,
+    val text: String,
+    val backTranslation: String
+)
+
+data class ReplyPolishResult(
+    val sourceInput: String,
+    val targetLanguage: ReplyLanguage,
+    val options: List<ReplyOption>
+)

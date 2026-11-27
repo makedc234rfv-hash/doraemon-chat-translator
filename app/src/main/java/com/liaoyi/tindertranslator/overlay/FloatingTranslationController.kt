@@ -21,6 +21,8 @@ import android.widget.TextView
 import com.liaoyi.tindertranslator.data.AppLanguage
 import com.liaoyi.tindertranslator.data.AppStrings
 import com.liaoyi.tindertranslator.data.OverlaySize
+import com.liaoyi.tindertranslator.data.ReplyLanguage
+import com.liaoyi.tindertranslator.data.ReplyPolishResult
 import com.liaoyi.tindertranslator.data.TranslationResult
 import com.liaoyi.tindertranslator.parser.ChatMessage
 import kotlin.math.abs
@@ -31,6 +33,13 @@ data class DisplayItem(
     val isTranslating: Boolean
 )
 
+data class PolishUiState(
+    val visible: Boolean = false,
+    val isLoading: Boolean = false,
+    val result: ReplyPolishResult? = null,
+    val message: String? = null
+)
+
 class FloatingTranslationController(
     private val context: Context,
     private val onToggleAutoPopup: () -> Unit,
@@ -38,7 +47,12 @@ class FloatingTranslationController(
     private val onRefreshClick: () -> Unit,
     private val onCollapseClick: () -> Unit,
     private val onExpandClick: () -> Unit,
-    private val onOpenSettingsClick: () -> Unit
+    private val onOpenSettingsClick: () -> Unit,
+    private val onPolishReplyClick: () -> Unit,
+    private val onCycleReplyLangClick: () -> Unit,
+    private val onClosePolishClick: () -> Unit,
+    private val onFillReplyClick: (String) -> Unit,
+    private val onCopyReplyClick: (String) -> Unit
 ) {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -55,17 +69,25 @@ class FloatingTranslationController(
     private var sizeBtn: TextView? = null
     private var refreshBtn: TextView? = null
     private var collapseBtn: TextView? = null
+
+    private var polishPanel: LinearLayout? = null
+    private var polishTriggerBtn: TextView? = null
+    private var replyLangChip: TextView? = null
+
     private var statusRow: LinearLayout? = null
     private var statusProgress: ProgressBar? = null
     private var statusText: TextView? = null
     private var statusActionBtn: TextView? = null
-    private var pillLabel: TextView? = null
+
+    private var pillTranslateLabel: TextView? = null
+    private var pillPolishLabel: TextView? = null
     private var pillDot: View? = null
 
     private var savedCardY: Int = -1
     private var savedPillY: Int = -1
     private var autoPopupEnabled: Boolean = true
     private var currentLanguage: AppLanguage = AppLanguage.ZH
+    private var currentReplyLanguage: ReplyLanguage = ReplyLanguage.AUTO
     private var currentSize: OverlaySize = OverlaySize.MEDIUM
     private var currentMode: Mode = Mode.HIDDEN
 
@@ -76,13 +98,16 @@ class FloatingTranslationController(
     fun showExpanded(
         items: List<DisplayItem>,
         language: AppLanguage,
+        replyLanguage: ReplyLanguage,
         overlaySize: OverlaySize,
         autoPopup: Boolean,
         isLoading: Boolean,
         errorMessage: String? = null,
-        showSettingsAction: Boolean = false
+        showSettingsAction: Boolean = false,
+        polishState: PolishUiState = PolishUiState()
     ) {
         currentLanguage = language
+        currentReplyLanguage = replyLanguage
         currentSize = overlaySize
         autoPopupEnabled = autoPopup
         removePill()
@@ -91,6 +116,7 @@ class FloatingTranslationController(
 
         applyCardSizingAndLabels()
         renderItems(items)
+        renderPolishPanel(polishState)
         renderStatus(isLoading, errorMessage, showSettingsAction)
     }
 
@@ -99,7 +125,9 @@ class FloatingTranslationController(
         removeCard()
         ensurePillAttached()
         currentMode = Mode.COLLAPSED
-        pillLabel?.text = language.pillSymbol
+        val t = AppStrings.of(language)
+        pillTranslateLabel?.text = language.pillSymbol
+        pillPolishLabel?.text = t.polishPillSymbol
         pillDot?.visibility = if (hasUnread) View.VISIBLE else View.GONE
     }
 
@@ -130,7 +158,7 @@ class FloatingTranslationController(
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedRect(
-                Color.parseColor("#F0191C24"),
+                Color.parseColor("#F2191C24"),
                 dp(16).toFloat(),
                 Color.parseColor("#33FFFFFF"),
                 dp(1)
@@ -197,20 +225,78 @@ class FloatingTranslationController(
         header.addView(rBtn)
         header.addView(cBtn)
 
-        // Scrollable items list with responsive dynamic max height
+        // Scrollable body containing incoming translations + optional reply polish results
         val scrollView = MaxHeightScrollView(context, (screenHeight * currentSize.heightRatio).toInt()).apply {
             isVerticalScrollBarEnabled = true
             overScrollMode = View.OVER_SCROLL_NEVER
         }
+        val scrollBody = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val polishBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(6)
+            }
+        }
+        polishPanel = polishBox
+
         val listLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
         }
+        itemsContainer = listLayout
+
+        scrollBody.addView(polishBox)
+        scrollBody.addView(listLayout)
+
         scrollView.addView(
-            listLayout,
+            scrollBody,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         )
         itemsScrollView = scrollView
-        itemsContainer = listLayout
+
+        // Quick Reply Polish bar at bottom of card
+        val replyBar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(6), dp(2), dp(1))
+        }
+
+        val polishBtn = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f * scale)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = roundedRect(Color.parseColor("#FFFE3C72"), dp(10).toFloat())
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { onPolishReplyClick() }
+        }
+        polishTriggerBtn = polishBtn
+
+        val langBtn = TextView(context).apply {
+            setTextColor(Color.parseColor("#FFE5E7EB"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f * scale)
+            typeface = Typeface.DEFAULT_BOLD
+            background = roundedRect(Color.parseColor("#2AFFFFFF"), dp(10).toFloat())
+            setPadding(dp(9), dp(6), dp(9), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginStart = dp(6)
+            }
+            setOnClickListener { onCycleReplyLangClick() }
+        }
+        replyLangChip = langBtn
+
+        replyBar.addView(polishBtn)
+        replyBar.addView(langBtn)
 
         // Footer status / error row
         val statusBar = LinearLayout(context).apply {
@@ -244,6 +330,7 @@ class FloatingTranslationController(
 
         root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(scrollView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(replyBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(statusBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val initialY = if (savedCardY >= 0) savedCardY else getStatusBarHeightPx() + dp(6)
@@ -276,52 +363,82 @@ class FloatingTranslationController(
         val screenHeight = dm.heightPixels
         val scale = screenScale()
 
-        val container = FrameLayout(context).apply {
+        val outer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
             background = roundedRect(
-                Color.parseColor("#E6191C24"),
-                dp(22).toFloat(),
+                Color.parseColor("#EA191C24"),
+                dp(20).toFloat(),
                 Color.parseColor("#66FE3C72"),
                 dp(1)
             )
             elevation = dp(8).toFloat()
-            val padH = dp((10 * scale).toInt())
-            val padV = dp((7 * scale).toInt())
-            setPadding(padH, padV, padH, padV)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
-        val label = TextView(context).apply {
+        // Top button: expand translations (译 / แปล)
+        val topBox = FrameLayout(context).apply {
+            setPadding(dp((7 * scale).toInt()), dp((5 * scale).toInt()), dp((7 * scale).toInt()), dp((5 * scale).toInt()))
+        }
+        val tLabel = TextView(context).apply {
             text = currentLanguage.pillSymbol
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f * scale)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f * scale)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
-        pillLabel = label
-        container.addView(label)
+        pillTranslateLabel = tLabel
+        topBox.addView(tLabel)
 
         val dot = View(context).apply {
             background = roundedRect(Color.parseColor("#FE3C72"), dp(4).toFloat())
             visibility = View.GONE
         }
-        val dotLp = FrameLayout.LayoutParams(dp(7), dp(7), Gravity.TOP or Gravity.END)
-        container.addView(dot, dotLp)
+        topBox.addView(dot, FrameLayout.LayoutParams(dp(7), dp(7), Gravity.TOP or Gravity.END))
         pillDot = dot
+
+        // Divider
+        val divider = View(context).apply {
+            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            layoutParams = LinearLayout.LayoutParams(dp(22), dp(1)).apply {
+                topMargin = dp(2)
+                bottomMargin = dp(2)
+            }
+        }
+
+        // Bottom button: polish draft reply (润 / เกลา)
+        val pLabel = TextView(context).apply {
+            text = AppStrings.of(currentLanguage).polishPillSymbol
+            setTextColor(Color.parseColor("#FFFF8FA9"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f * scale)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp((7 * scale).toInt()), dp((5 * scale).toInt()), dp((7 * scale).toInt()), dp((5 * scale).toInt()))
+        }
+        pillPolishLabel = pLabel
+
+        outer.addView(topBox)
+        outer.addView(divider)
+        outer.addView(pLabel)
 
         val pillY = if (savedPillY >= 0) savedPillY else (screenHeight * 0.24f).toInt()
         val params = createOverlayParams(
             width = WindowManager.LayoutParams.WRAP_CONTENT,
             height = WindowManager.LayoutParams.WRAP_CONTENT,
-            x = screenWidth - dp(50),
+            x = screenWidth - dp(54),
             y = pillY
         )
 
-        attachPillDragAndTap(container, params, screenHeight) { newY ->
+        attachPillDragAndTap(topBox, outer, params, screenHeight, onTap = onExpandClick) { newY ->
+            savedPillY = newY
+        }
+        attachPillDragAndTap(pLabel, outer, params, screenHeight, onTap = onPolishReplyClick) { newY ->
             savedPillY = newY
         }
 
         try {
-            windowManager.addView(container, params)
-            pillView = container
+            windowManager.addView(outer, params)
+            pillView = outer
             pillParams = params
         } catch (_: Exception) {
             pillView = null
@@ -338,6 +455,8 @@ class FloatingTranslationController(
         sizeBtn?.text = t.sizeLabel(currentSize)
         refreshBtn?.text = t.overlayRefresh
         collapseBtn?.text = t.overlayCollapse
+        polishTriggerBtn?.text = "✨ ${t.polishBtn}"
+        replyLangChip?.text = t.replyLangLabel(currentReplyLanguage)
 
         autoPopupBtn?.let { btn ->
             if (autoPopupEnabled) {
@@ -350,6 +469,161 @@ class FloatingTranslationController(
                 btn.setTextColor(Color.parseColor("#FF9CA3AF"))
             }
         }
+    }
+
+    private fun renderPolishPanel(state: PolishUiState) {
+        val panel = polishPanel ?: return
+        panel.removeAllViews()
+        if (!state.visible) {
+            panel.visibility = View.GONE
+            return
+        }
+
+        panel.visibility = View.VISIBLE
+        val t = AppStrings.of(currentLanguage)
+        val scale = screenScale()
+        val fontFactor = scale * currentSize.fontScale
+
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedRect(
+                Color.parseColor("#FF2A2233"),
+                dp(12).toFloat(),
+                Color.parseColor("#66FE3C72"),
+                dp(1)
+            )
+            val pad = dp((9 * scale).toInt())
+            setPadding(pad, pad, pad, pad)
+        }
+
+        // Panel header
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val langTag = state.result?.targetLanguage?.shortLabel ?: t.replyLangLabel(currentReplyLanguage)
+        val hTitle = TextView(context).apply {
+            text = "✨ ${t.polishHeaderPrefix} $langTag"
+            setTextColor(Color.parseColor("#FFFFA3B8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f * fontFactor)
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val closeBtn = makeHeaderChip(t.polishCloseBtn, scale).apply {
+            setOnClickListener { onClosePolishClick() }
+        }
+        header.addView(hTitle)
+        header.addView(closeBtn)
+        card.addView(header)
+
+        when {
+            state.isLoading -> {
+                val loadRow = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(8), 0, dp(4))
+                }
+                val pb = ProgressBar(context, null, android.R.attr.progressBarStyleSmall).apply {
+                    isIndeterminate = true
+                    layoutParams = LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginEnd = dp(6) }
+                }
+                val tv = TextView(context).apply {
+                    text = t.polishLoading
+                    setTextColor(Color.parseColor("#FFE5E7EB"))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f * fontFactor)
+                }
+                loadRow.addView(pb)
+                loadRow.addView(tv)
+                card.addView(loadRow)
+            }
+            !state.message.isNullOrBlank() -> {
+                val msgTv = TextView(context).apply {
+                    text = state.message
+                    setTextColor(Color.parseColor("#FFFDE68A"))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f * fontFactor)
+                    setPadding(0, dp(6), 0, dp(2))
+                }
+                card.addView(msgTv)
+            }
+            state.result != null -> {
+                state.result.options.forEachIndexed { idx, opt ->
+                    val optBox = LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        background = roundedRect(Color.parseColor("#FF1F1B27"), dp(10).toFloat())
+                        setPadding(dp(8), dp(7), dp(8), dp(7))
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = if (idx == 0) dp(6) else dp(5)
+                        }
+                    }
+
+                    val topRow = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val styleBadge = TextView(context).apply {
+                        text = opt.styleLabel
+                        setTextColor(Color.parseColor("#FFFBBF24"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f * fontFactor)
+                        typeface = Typeface.DEFAULT_BOLD
+                        background = roundedRect(Color.parseColor("#2BF59E0B"), dp(6).toFloat())
+                        setPadding(dp(6), dp(2), dp(6), dp(2))
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    }
+                    val fillBtn = makeHeaderChip(
+                        t.polishFillBtn,
+                        scale,
+                        Color.parseColor("#FFFE3C72"),
+                        Color.WHITE
+                    ).apply {
+                        setOnClickListener { onFillReplyClick(opt.text) }
+                    }
+                    val copyBtn = makeHeaderChip(t.polishCopyBtn, scale).apply {
+                        setOnClickListener { onCopyReplyClick(opt.text) }
+                    }
+                    topRow.addView(styleBadge)
+                    topRow.addView(fillBtn)
+                    topRow.addView(copyBtn)
+                    optBox.addView(topRow)
+
+                    val replyTv = TextView(context).apply {
+                        text = opt.text
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f * fontFactor)
+                        setLineSpacing(dp(2).toFloat(), 1f)
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = dp(5)
+                        }
+                    }
+                    optBox.addView(replyTv)
+
+                    if (opt.backTranslation.isNotEmpty()) {
+                        val backTv = TextView(context).apply {
+                            text = "${t.polishBackPrefix}${opt.backTranslation}"
+                            setTextColor(Color.parseColor("#FF9CA3AF"))
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f * fontFactor)
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply {
+                                topMargin = dp(3)
+                            }
+                        }
+                        optBox.addView(backTv)
+                    }
+
+                    card.addView(optBox)
+                }
+            }
+        }
+
+        panel.addView(card)
+        itemsScrollView?.post { itemsScrollView?.fullScroll(View.FOCUS_UP) }
     }
 
     private fun renderItems(items: List<DisplayItem>) {
@@ -463,7 +737,9 @@ class FloatingTranslationController(
 
             container.addView(row)
         }
-        itemsScrollView?.post { itemsScrollView?.fullScroll(View.FOCUS_DOWN) }
+        if (polishPanel?.visibility != View.VISIBLE) {
+            itemsScrollView?.post { itemsScrollView?.fullScroll(View.FOCUS_DOWN) }
+        }
     }
 
     private fun renderStatus(isLoading: Boolean, errorMessage: String?, showSettingsAction: Boolean) {
@@ -513,6 +789,9 @@ class FloatingTranslationController(
         sizeBtn = null
         refreshBtn = null
         collapseBtn = null
+        polishPanel = null
+        polishTriggerBtn = null
+        replyLangChip = null
         statusRow = null
         statusProgress = null
         statusText = null
@@ -524,7 +803,8 @@ class FloatingTranslationController(
         runCatching { windowManager.removeViewImmediate(view) }
         pillView = null
         pillParams = null
-        pillLabel = null
+        pillTranslateLabel = null
+        pillPolishLabel = null
         pillDot = null
     }
 
@@ -585,9 +865,11 @@ class FloatingTranslationController(
     }
 
     private fun attachPillDragAndTap(
-        pill: View,
+        touchTarget: View,
+        pillRoot: View,
         params: WindowManager.LayoutParams,
         screenHeight: Int,
+        onTap: () -> Unit,
         onMoved: (Int) -> Unit
     ) {
         var startY = 0
@@ -596,7 +878,7 @@ class FloatingTranslationController(
         var dragging = false
         val slop = dp(6)
 
-        pill.setOnTouchListener { _, event ->
+        touchTarget.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startY = params.y
@@ -612,16 +894,16 @@ class FloatingTranslationController(
                         dragging = true
                     }
                     if (dragging) {
-                        val newY = (startY + dy.toInt()).coerceIn(dp(48), (screenHeight * 0.80f).toInt())
+                        val newY = (startY + dy.toInt()).coerceIn(dp(48), (screenHeight * 0.78f).toInt())
                         params.y = newY
-                        runCatching { windowManager.updateViewLayout(pill, params) }
+                        runCatching { windowManager.updateViewLayout(pillRoot, params) }
                         onMoved(newY)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragging) {
-                        onExpandClick()
+                        onTap()
                     }
                     true
                 }

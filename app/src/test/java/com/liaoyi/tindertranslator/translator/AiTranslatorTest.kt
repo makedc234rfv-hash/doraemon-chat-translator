@@ -4,8 +4,11 @@ import com.liaoyi.tindertranslator.data.AiProvider
 import com.liaoyi.tindertranslator.data.AppLanguage
 import com.liaoyi.tindertranslator.data.AppStrings
 import com.liaoyi.tindertranslator.data.OverlaySize
+import com.liaoyi.tindertranslator.data.ReplyGender
+import com.liaoyi.tindertranslator.data.ReplyLanguage
 import com.liaoyi.tindertranslator.data.TranslatorSettings
 import com.liaoyi.tindertranslator.parser.ChatMessage
+import com.liaoyi.tindertranslator.parser.LanguageDetector
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -150,5 +153,70 @@ class AiTranslatorTest {
         assertEquals(OverlaySize.MEDIUM, OverlaySize.SMALL.next())
         assertEquals(OverlaySize.LARGE, OverlaySize.MEDIUM.next())
         assertEquals(OverlaySize.SMALL, OverlaySize.LARGE.next())
+    }
+
+    @Test
+    fun `polishReply auto-detects Thai match language and respects male vs female Thai particles`() = runTest {
+        val mockJson = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "parts": [
+                      {
+                        "text": "{\"options\":[{\"style\":\"自然地道\",\"text\":\"เพิ่งเลิกงานเลย เหนื่อยนิดหน่อย คืนนี้ทำไรอยู่ครับ\",\"back\":\"刚下班有点累，你今晚干嘛呢\"},{\"style\":\"轻松暖一点\",\"text\":\"เพิ่งเลิกงานเลยครับ แอบเหนื่อยนิดนึง คืนนี้ว่างคุยกันมั้ย\",\"back\":\"刚下班有点小累，今晚有空聊会儿吗\"}]}"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(mockJson))
+
+        val translator = AiTranslator(baseUrlOverride = server.url("/").toString())
+        val context = listOf(
+            ChatMessage("in1", "สวัสดีค่ะ วันนี้ทำงานเหนื่อยไหมคะ?", isIncoming = true, topY = 400)
+        )
+        val settings = TranslatorSettings(
+            language = AppLanguage.ZH,
+            provider = AiProvider.GEMINI,
+            apiKey = "AIza-test",
+            replyLanguage = ReplyLanguage.AUTO,
+            replyGender = ReplyGender.MALE
+        )
+
+        val result = translator.polishReply("我刚刚下班很累，你晚上做什么", context, settings)
+        assertTrue(result.isSuccess)
+        val polished = result.getOrThrow()
+        assertEquals(ReplyLanguage.TH, polished.targetLanguage)
+        assertEquals(2, polished.options.size)
+        assertTrue(polished.options[0].text.contains("ครับ"))
+        assertEquals("刚下班有点累，你今晚干嘛呢", polished.options[0].backTranslation)
+
+        val recorded = server.takeRequest().body.readUtf8()
+        assertTrue(recorded.contains("NEVER use ค่ะ/คะ"))
+
+        // Verify female Thai prompt switches particles properly
+        val femalePrompt = translator.buildReplyPolishSystemPrompt(
+            ReplyLanguage.TH,
+            AppLanguage.TH,
+            ReplyGender.FEMALE
+        )
+        assertTrue(femalePrompt.contains("NEVER use ครับ"))
+
+        // Verify auto-detection for English / Japanese / Thai
+        assertEquals(
+            ReplyLanguage.TH,
+            LanguageDetector.detectReplyLanguage(listOf("สวัสดีค่ะ สบายดีไหม"), AppLanguage.ZH)
+        )
+        assertEquals(
+            ReplyLanguage.EN,
+            LanguageDetector.detectReplyLanguage(listOf("Hey how was your day?"), AppLanguage.ZH)
+        )
+        assertEquals(
+            ReplyLanguage.JA,
+            LanguageDetector.detectReplyLanguage(listOf("今週末ひまですか？"), AppLanguage.ZH)
+        )
     }
 }

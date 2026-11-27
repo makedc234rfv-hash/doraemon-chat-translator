@@ -1,11 +1,53 @@
 package com.liaoyi.tindertranslator.parser
 
 import com.liaoyi.tindertranslator.data.AppLanguage
+import com.liaoyi.tindertranslator.data.ReplyLanguage
 
 object LanguageDetector {
 
     fun needsChineseTranslation(text: String): Boolean {
         return needsTranslation(text, AppLanguage.ZH)
+    }
+
+    /**
+     * Detects the likely language of an incoming message so ReplyLanguage.AUTO
+     * automatically replies in the match's own language (e.g., Thai -> Thai).
+     */
+    fun detectReplyLanguage(
+        recentIncomingTexts: List<String>,
+        fallbackUiLanguage: AppLanguage
+    ): ReplyLanguage {
+        var thai = 0
+        var kana = 0
+        var hangul = 0
+        var cjk = 0
+        var latin = 0
+
+        for (raw in recentIncomingTexts.takeLast(3)) {
+            var i = 0
+            while (i < raw.length) {
+                val cp = raw.codePointAt(i)
+                i += Character.charCount(cp)
+                when {
+                    isThai(cp) -> thai++
+                    isKana(cp) -> kana++
+                    isHangul(cp) -> hangul++
+                    isCjkIdeograph(cp) -> cjk++
+                    isAsciiLatin(cp) || isExtendedLatin(cp) -> latin++
+                }
+            }
+        }
+
+        return when {
+            thai >= 3 -> ReplyLanguage.TH
+            kana >= 2 -> ReplyLanguage.JA
+            hangul >= 2 -> ReplyLanguage.KO
+            cjk >= 2 && fallbackUiLanguage != AppLanguage.ZH -> ReplyLanguage.ZH
+            latin >= 3 -> ReplyLanguage.EN
+            fallbackUiLanguage == AppLanguage.ZH -> ReplyLanguage.TH
+            fallbackUiLanguage == AppLanguage.TH -> ReplyLanguage.ZH
+            else -> ReplyLanguage.EN
+        }
     }
 
     /**

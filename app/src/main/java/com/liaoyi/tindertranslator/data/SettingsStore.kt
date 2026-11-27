@@ -27,6 +27,8 @@ class SettingsStore(context: Context) {
         val provider = AiProvider.fromName(prefs.getString(KEY_PROVIDER, AiProvider.GEMINI.name))
         val language = AppLanguage.fromCode(prefs.getString(KEY_LANGUAGE, AppLanguage.ZH.code))
         val overlaySize = OverlaySize.fromLevel(prefs.getInt(KEY_OVERLAY_SIZE, OverlaySize.MEDIUM.level))
+        val replyLanguage = ReplyLanguage.fromCode(prefs.getString(KEY_REPLY_LANGUAGE, ReplyLanguage.AUTO.code))
+        val replyGender = ReplyGender.fromCode(prefs.getString(KEY_REPLY_GENDER, ReplyGender.MALE.code))
         return TranslatorSettings(
             language = language,
             provider = provider,
@@ -38,6 +40,8 @@ class SettingsStore(context: Context) {
             explainSlang = prefs.getBoolean(KEY_EXPLAIN_SLANG, true),
             showMyMessages = prefs.getBoolean(KEY_SHOW_MY_MESSAGES, false),
             overlaySize = overlaySize,
+            replyLanguage = replyLanguage,
+            replyGender = replyGender,
             maxMessages = prefs.getInt(KEY_MAX_MESSAGES, 5).coerceIn(3, 8)
         )
     }
@@ -53,6 +57,8 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_EXPLAIN_SLANG, settings.explainSlang)
             .putBoolean(KEY_SHOW_MY_MESSAGES, settings.showMyMessages)
             .putInt(KEY_OVERLAY_SIZE, settings.overlaySize.level)
+            .putString(KEY_REPLY_LANGUAGE, settings.replyLanguage.code)
+            .putString(KEY_REPLY_GENDER, settings.replyGender.code)
             .putInt(KEY_MAX_MESSAGES, settings.maxMessages.coerceIn(3, 8))
             .apply()
     }
@@ -63,6 +69,10 @@ class SettingsStore(context: Context) {
 
     fun setOverlaySize(size: OverlaySize) {
         prefs.edit().putInt(KEY_OVERLAY_SIZE, size.level).apply()
+    }
+
+    fun setReplyLanguage(lang: ReplyLanguage) {
+        prefs.edit().putString(KEY_REPLY_LANGUAGE, lang.code).apply()
     }
 
     @Synchronized
@@ -139,6 +149,8 @@ class SettingsStore(context: Context) {
         private const val KEY_EXPLAIN_SLANG = "explain_slang"
         private const val KEY_SHOW_MY_MESSAGES = "show_my_messages"
         private const val KEY_OVERLAY_SIZE = "overlay_size"
+        private const val KEY_REPLY_LANGUAGE = "reply_language"
+        private const val KEY_REPLY_GENDER = "reply_gender"
         private const val KEY_MAX_MESSAGES = "max_messages"
         private const val KEY_CACHE_JSON = "cache_json"
         private const val MAX_CACHE_SIZE = 200

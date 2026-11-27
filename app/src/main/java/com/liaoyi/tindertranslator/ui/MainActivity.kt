@@ -24,6 +24,8 @@ import com.liaoyi.tindertranslator.R
 import com.liaoyi.tindertranslator.data.AiProvider
 import com.liaoyi.tindertranslator.data.AppLanguage
 import com.liaoyi.tindertranslator.data.AppStrings
+import com.liaoyi.tindertranslator.data.ReplyGender
+import com.liaoyi.tindertranslator.data.ReplyLanguage
 import com.liaoyi.tindertranslator.data.SettingsStore
 import com.liaoyi.tindertranslator.data.TranslatorSettings
 import com.liaoyi.tindertranslator.service.TinderAccessibilityService
@@ -44,6 +46,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvAppSubtitle: TextView
     private lateinit var tvLangLabel: TextView
     private lateinit var chipGroupLanguage: ChipGroup
+    private lateinit var tvReplySettingsLabel: TextView
+    private lateinit var chipGroupReplyLang: ChipGroup
+    private lateinit var chipReplyAuto: Chip
+    private lateinit var chipGroupGender: ChipGroup
+    private lateinit var chipGenderMale: Chip
+    private lateinit var chipGenderFemale: Chip
+    private lateinit var chipGenderNeutral: Chip
 
     private lateinit var tvStep1Title: TextView
     private lateinit var tvServiceBadge: TextView
@@ -74,6 +83,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvSafetyBody: TextView
 
     private var selectedLanguage: AppLanguage = AppLanguage.ZH
+    private var selectedReplyLanguage: ReplyLanguage = ReplyLanguage.AUTO
+    private var selectedGender: ReplyGender = ReplyGender.MALE
     private var selectedProvider: AiProvider = AiProvider.GEMINI
     private var suppressChipListener = false
 
@@ -134,6 +145,13 @@ class MainActivity : AppCompatActivity() {
         tvAppSubtitle = findViewById(R.id.tvAppSubtitle)
         tvLangLabel = findViewById(R.id.tvLangLabel)
         chipGroupLanguage = findViewById(R.id.chipGroupLanguage)
+        tvReplySettingsLabel = findViewById(R.id.tvReplySettingsLabel)
+        chipGroupReplyLang = findViewById(R.id.chipGroupReplyLang)
+        chipReplyAuto = findViewById(R.id.chipReplyAuto)
+        chipGroupGender = findViewById(R.id.chipGroupGender)
+        chipGenderMale = findViewById(R.id.chipGenderMale)
+        chipGenderFemale = findViewById(R.id.chipGenderFemale)
+        chipGenderNeutral = findViewById(R.id.chipGenderNeutral)
 
         tvStep1Title = findViewById(R.id.tvStep1Title)
         tvServiceBadge = findViewById(R.id.tvServiceBadge)
@@ -167,6 +185,8 @@ class MainActivity : AppCompatActivity() {
     private fun populateFromSettings() {
         val s = settingsStore.loadSettings()
         selectedLanguage = s.language
+        selectedReplyLanguage = s.replyLanguage
+        selectedGender = s.replyGender
         selectedProvider = s.provider
 
         suppressChipListener = true
@@ -177,6 +197,23 @@ class MainActivity : AppCompatActivity() {
                 AppLanguage.EN -> R.id.chipLangEn
                 AppLanguage.JA -> R.id.chipLangJa
                 AppLanguage.KO -> R.id.chipLangKo
+            }
+        )
+        chipGroupReplyLang.check(
+            when (s.replyLanguage) {
+                ReplyLanguage.AUTO -> R.id.chipReplyAuto
+                ReplyLanguage.TH -> R.id.chipReplyTh
+                ReplyLanguage.EN -> R.id.chipReplyEn
+                ReplyLanguage.ZH -> R.id.chipReplyZh
+                ReplyLanguage.JA -> R.id.chipReplyJa
+                ReplyLanguage.KO -> R.id.chipReplyKo
+            }
+        )
+        chipGroupGender.check(
+            when (s.replyGender) {
+                ReplyGender.MALE -> R.id.chipGenderMale
+                ReplyGender.FEMALE -> R.id.chipGenderFemale
+                ReplyGender.NEUTRAL -> R.id.chipGenderNeutral
             }
         )
         chipGroupProvider.check(
@@ -215,6 +252,31 @@ class MainActivity : AppCompatActivity() {
             saveCurrentForm()
             applyLanguageUi()
             updateServiceStatus()
+        }
+
+        chipGroupReplyLang.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (suppressChipListener) return@setOnCheckedStateChangeListener
+            val checked = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            selectedReplyLanguage = when (checked) {
+                R.id.chipReplyTh -> ReplyLanguage.TH
+                R.id.chipReplyEn -> ReplyLanguage.EN
+                R.id.chipReplyZh -> ReplyLanguage.ZH
+                R.id.chipReplyJa -> ReplyLanguage.JA
+                R.id.chipReplyKo -> ReplyLanguage.KO
+                else -> ReplyLanguage.AUTO
+            }
+            saveCurrentForm()
+        }
+
+        chipGroupGender.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (suppressChipListener) return@setOnCheckedStateChangeListener
+            val checked = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            selectedGender = when (checked) {
+                R.id.chipGenderFemale -> ReplyGender.FEMALE
+                R.id.chipGenderNeutral -> ReplyGender.NEUTRAL
+                else -> ReplyGender.MALE
+            }
+            saveCurrentForm()
         }
 
         btnOpenAccessibility.setOnClickListener {
@@ -292,6 +354,11 @@ class MainActivity : AppCompatActivity() {
         tvAppTitle.text = t.appTitle
         tvAppSubtitle.text = t.appSubtitle
         tvLangLabel.text = t.langLabel
+        tvReplySettingsLabel.text = t.replySettingsLabel
+        chipReplyAuto.text = t.replyLangAuto
+        chipGenderMale.text = t.genderMale
+        chipGenderFemale.text = t.genderFemale
+        chipGenderNeutral.text = t.genderNeutral
         tvStep1Title.text = t.step1Title
         tvServiceHint.text = t.step1Hint
         btnOpenAccessibility.text = t.btnOpenAccessibility
@@ -336,6 +403,8 @@ class MainActivity : AppCompatActivity() {
             explainSlang = switchExplainSlang.isChecked,
             showMyMessages = switchShowMine.isChecked,
             overlaySize = existing.overlaySize,
+            replyLanguage = selectedReplyLanguage,
+            replyGender = selectedGender,
             maxMessages = existing.maxMessages
         )
         settingsStore.saveSettings(settings)
