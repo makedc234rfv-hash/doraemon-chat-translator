@@ -412,26 +412,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateServiceStatus() {
-        val enabled = TinderAccessibilityService.isRunning || isAccessibilityEnabledInSettings()
+        val running = TinderAccessibilityService.isRunning
+        val enabledInSettings = isAccessibilityEnabledInSettings()
         val t = AppStrings.of(selectedLanguage)
+
+        val bgColorRes = if (running) R.color.status_ok_bg else R.color.status_warn_bg
+        val textColorRes = if (running) R.color.status_ok_text else R.color.status_warn_text
+
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = 30f
-            setColor(
-                ContextCompat.getColor(
-                    this@MainActivity,
-                    if (enabled) R.color.status_ok_bg else R.color.status_warn_bg
-                )
-            )
+            setColor(ContextCompat.getColor(this@MainActivity, bgColorRes))
         }
         tvServiceBadge.background = bg
-        tvServiceBadge.setTextColor(
-            ContextCompat.getColor(
-                this,
-                if (enabled) R.color.status_ok_text else R.color.status_warn_text
-            )
-        )
-        tvServiceBadge.text = if (enabled) t.statusOn else t.statusOff
+        tvServiceBadge.setTextColor(ContextCompat.getColor(this, textColorRes))
+
+        when {
+            running -> {
+                tvServiceBadge.text = t.statusOn
+                tvServiceHint.text = t.step1Hint
+                tvServiceHint.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+            }
+            enabledInSettings -> {
+                tvServiceBadge.text = t.statusStale
+                tvServiceHint.text = t.step1StaleHint
+                tvServiceHint.setTextColor(ContextCompat.getColor(this, R.color.status_warn_text))
+            }
+            else -> {
+                tvServiceBadge.text = t.statusOff
+                tvServiceHint.text = t.step1Hint
+                tvServiceHint.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+            }
+        }
     }
 
     private fun isAccessibilityEnabledInSettings(): Boolean {

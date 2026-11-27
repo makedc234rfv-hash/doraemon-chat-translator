@@ -103,4 +103,32 @@ class ChatMessageParserTest {
         assertFalse(LanguageDetector.needsTranslation("😂🔥❤️", AppLanguage.TH))
         assertFalse(LanguageDetector.needsTranslation("a", AppLanguage.ZH))
     }
+
+    @Test
+    fun `detects Compose chat screen via Send or Thai placeholder and supports fallback extraction`() {
+        // Tinder Compose screen where EditText isEditable wasn't exposed, only Send/GIF buttons
+        val composeChatNodes = listOf(
+            ScreenNode(text = "สวัสดีค่ะ คืนนี้ว่างมั้ยคะ?", left = 120, top = 500, right = 860, bottom = 590),
+            ScreenNode(text = "Send", className = "android.view.View", left = 880, top = 2120, right = 1030, bottom = 2230)
+        )
+        assertTrue(ChatMessageParser.isChatScreen(composeChatNodes, screenW, screenH))
+        val extracted = ChatMessageParser.extractMessages(composeChatNodes, screenW, screenH)
+        assertEquals(1, extracted.size)
+        assertEquals("สวัสดีค่ะ คืนนี้ว่างมั้ยคะ?", extracted[0].text)
+
+        // Manual tap fallback when composer wasn't matched at all
+        val noComposerNodes = listOf(
+            ScreenNode(text = "Hey! Want to grab coffee later?", left = 110, top = 620, right = 840, bottom = 710)
+        )
+        assertFalse(ChatMessageParser.isChatScreen(noComposerNodes, screenW, screenH))
+        assertEquals(0, ChatMessageParser.extractMessages(noComposerNodes, screenW, screenH).size)
+        val manualExtracted = ChatMessageParser.extractMessages(
+            noComposerNodes,
+            screenW,
+            screenH,
+            allowFallbackViewport = true
+        )
+        assertEquals(1, manualExtracted.size)
+        assertEquals("Hey! Want to grab coffee later?", manualExtracted[0].text)
+    }
 }

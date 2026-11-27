@@ -5,9 +5,11 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.text.TextUtils
 import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -55,7 +57,13 @@ class FloatingTranslationController(
     private val onCopyReplyClick: (String) -> Unit
 ) {
 
-    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val overlayContext: Context = createOverlayContext(context)
+    private val windowManager: WindowManager =
+        overlayContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val fallbackWindowManager: WindowManager =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    private var activeWindowManager: WindowManager = windowManager
 
     private var cardView: View? = null
     private var cardParams: WindowManager.LayoutParams? = null
@@ -94,6 +102,20 @@ class FloatingTranslationController(
     enum class Mode { HIDDEN, EXPANDED, COLLAPSED }
 
     val mode: Mode get() = currentMode
+
+    fun isOverlayActuallyAttached(): Boolean {
+        return when (currentMode) {
+            Mode.EXPANDED -> cardView?.isAttachedToWindow == true
+            Mode.COLLAPSED -> pillView?.isAttachedToWindow == true
+            Mode.HIDDEN -> false
+        }
+    }
+
+    fun resetPositionsForConfigChange() {
+        savedCardY = -1
+        savedPillY = -1
+        hideAll()
+    }
 
     fun showExpanded(
         items: List<DisplayItem>,
@@ -144,9 +166,12 @@ class FloatingTranslationController(
     }
 
     private fun ensureCardAttached() {
-        if (cardView != null) return
+        if (cardView != null && cardView?.isAttachedToWindow == true) return
+        if (cardView != null) {
+            removeCard()
+        }
 
-        val dm = context.resources.displayMetrics
+        val dm = overlayContext.resources.displayMetrics
         val screenWidth = dm.widthPixels
         val screenHeight = dm.heightPixels
         val scale = screenScale()
@@ -345,21 +370,22 @@ class FloatingTranslationController(
             savedCardY = newY
         }
 
-        try {
-            windowManager.addView(root, params)
+        if (addOverlayView(root, params)) {
             cardView = root
             cardParams = params
-        } catch (_: Exception) {
+        } else {
             cardView = null
             cardParams = null
         }
     }
 
     private fun ensurePillAttached() {
-        if (pillView != null) return
+        if (pillView != null && pillView?.isAttachedToWindow == true) return
+        if (pillView != null) {
+            removePill()
+        }
 
-        val dm = context.resources.displayMetrics
-        val screenWidth = dm.widthPixels
+        val dm = overlayContext.resources.displayMetrics
         val screenHeight = dm.heightPixels
         val scale = screenScale()
 
@@ -421,12 +447,13 @@ class FloatingTranslationController(
         outer.addView(divider)
         outer.addView(pLabel)
 
-        val pillY = if (savedPillY >= 0) savedPillY else (screenHeight * 0.24f).toInt()
+        val pillY = if (savedPillY >= 0) savedPillY else (screenHeight * 0.28f).toInt()
         val params = createOverlayParams(
             width = WindowManager.LayoutParams.WRAP_CONTENT,
             height = WindowManager.LayoutParams.WRAP_CONTENT,
-            x = screenWidth - dp(54),
-            y = pillY
+            x = dp(6),
+            y = pillY,
+            gravity = Gravity.TOP or Gravity.END
         )
 
         attachPillDragAndTap(topBox, outer, params, screenHeight, onTap = onExpandClick) { newY ->
@@ -436,11 +463,10 @@ class FloatingTranslationController(
             savedPillY = newY
         }
 
-        try {
-            windowManager.addView(outer, params)
+        if (addOverlayView(outer, params)) {
             pillView = outer
             pillParams = params
-        } catch (_: Exception) {
+        } else {
             pillView = null
             pillParams = null
         }
@@ -779,7 +805,8 @@ class FloatingTranslationController(
 
     private fun removeCard() {
         val view = cardView ?: return
-        runCatching { windowManager.removeViewImmediate(view) }
+        runCatching { activeWindowManager.removeViewImmediate(view) }
+            .onFailure { runCatching { fallbackWindowManager.removeViewImmediate(view) } }
         cardView = null
         cardParams = null
         titleView = null
@@ -800,7 +827,8 @@ class FloatingTranslationController(
 
     private fun removePill() {
         val view = pillView ?: return
-        runCatching { windowManager.removeViewImmediate(view) }
+        runCatching { activeWindowManager.removeViewImmediate(view) }
+            .onFailure { runCatching { fallbackWindowManager.removeViewImmediate(view) } }
         pillView = null
         pillParams = null
         pillTranslateLabel = null
@@ -808,11 +836,28 @@ class FloatingTranslationController(
         pillDot = null
     }
 
+    private fun addOverlayView(view: View, params: WindowManager.LayoutParams): Boolean {
+        return try {
+            windowManager.addView(view, params)
+            activeWindowManager = windowManager
+            true
+        } catch (_: Exception) {
+            try {
+                fallbackWindowManager.addView(view, params)
+                activeWindowManager = fallbackWindowManager
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     private fun createOverlayParams(
         width: Int,
         height: Int,
         x: Int,
-        y: Int
+        y: Int,
+        gravity: Int = Gravity.TOP or Gravity.START
     ): WindowManager.LayoutParams {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
@@ -829,10 +874,27 @@ class FloatingTranslationController(
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
+            this.gravity = gravity
             this.x = x
             this.y = y
         }
+    }
+
+    private fun createOverlayContext(base: Context): Context {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val dm = base.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+            if (display != null) {
+                return runCatching {
+                    base.createWindowContext(
+                        display,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        null
+                    )
+                }.getOrDefault(base)
+            }
+        }
+        return base
     }
 
     private fun attachVerticalDrag(
@@ -855,7 +917,7 @@ class FloatingTranslationController(
                     val dy = (event.rawY - startTouchY).toInt()
                     val newY = (startY + dy).coerceIn(dp(24), (screenHeight * 0.65f).toInt())
                     params.y = newY
-                    runCatching { windowManager.updateViewLayout(root, params) }
+                    runCatching { activeWindowManager.updateViewLayout(root, params) }
                     onMoved(newY)
                     true
                 }
@@ -896,7 +958,7 @@ class FloatingTranslationController(
                     if (dragging) {
                         val newY = (startY + dy.toInt()).coerceIn(dp(48), (screenHeight * 0.78f).toInt())
                         params.y = newY
-                        runCatching { windowManager.updateViewLayout(pillRoot, params) }
+                        runCatching { activeWindowManager.updateViewLayout(pillRoot, params) }
                         onMoved(newY)
                     }
                     true

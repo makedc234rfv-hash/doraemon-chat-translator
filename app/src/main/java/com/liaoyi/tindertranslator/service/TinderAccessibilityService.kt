@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -43,6 +44,8 @@ class TinderAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var debounceJob: Job? = null
+    private var leaveGraceJob: Job? = null
+    private var watchdogJob: Job? = null
     private var translateJob: Job? = null
     private var polishJob: Job? = null
 
@@ -73,27 +76,60 @@ class TinderAccessibilityService : AccessibilityService() {
         isRunning = true
         instance = this
         onStatusChanged?.invoke(true)
+
+        // If Tinder or MockChat is already open when service binds, show bubble right away
+        val existingPkg = detectActiveTargetPackage("")
+        if (existingPkg != null) {
+            activeTargetPackage = existingPkg
+            startWatchdog()
+            scheduleDebouncedScan()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::overlayController.isInitialized) {
+            overlayController.resetPositionsForConfigChange()
+            if (activeTargetPackage != null) {
+                scheduleDebouncedScan()
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val eventPkg = event.packageName?.toString().orEmpty()
 
-        if (eventPkg in IGNORED_PACKAGES && event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (eventPkg in IGNORED_PACKAGES &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        ) {
             return
         }
 
         val currentTargetPkg = detectActiveTargetPackage(eventPkg)
         if (currentTargetPkg == null) {
             if (activeTargetPackage != null) {
-                leaveTargetApp()
+                scheduleLeaveTargetApp()
             }
             return
         }
 
+        leaveGraceJob?.cancel()
+        leaveGraceJob = null
+
         if (activeTargetPackage != currentTargetPkg) {
             activeTargetPackage = currentTargetPkg
             triggerTracker.resetSession()
+            startWatchdog()
+        } else if (watchdogJob?.isActive != true) {
+            startWatchdog()
+        }
+
+        // Immediately ensure the pill is visible inside Tinder if overlay isn't attached yet
+        if (!overlayController.isOverlayActuallyAttached()) {
+            val settings = settingsStore.loadSettings()
+            overlayController.showCollapsedPill(settings.language, hasUnread = false)
         }
 
         scheduleDebouncedScan()
@@ -101,6 +137,8 @@ class TinderAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         debounceJob?.cancel()
+        leaveGraceJob?.cancel()
+        watchdogJob?.cancel()
         translateJob?.cancel()
         polishJob?.cancel()
         if (::overlayController.isInitialized) {
@@ -113,6 +151,8 @@ class TinderAccessibilityService : AccessibilityService() {
         instance = null
         onStatusChanged?.invoke(false)
         debounceJob?.cancel()
+        leaveGraceJob?.cancel()
+        watchdogJob?.cancel()
         translateJob?.cancel()
         polishJob?.cancel()
         if (::overlayController.isInitialized) {
@@ -156,9 +196,38 @@ class TinderAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun scheduleLeaveTargetApp() {
+        if (leaveGraceJob?.isActive == true) return
+        leaveGraceJob = serviceScope.launch {
+            delay(LEAVE_GRACE_MS)
+            if (detectActiveTargetPackage("") == null) {
+                leaveTargetApp()
+            }
+        }
+    }
+
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = serviceScope.launch {
+            while (activeTargetPackage != null) {
+                delay(WATCHDOG_INTERVAL_MS)
+                val livePkg = detectActiveTargetPackage("")
+                if (livePkg == null) {
+                    leaveTargetApp()
+                    break
+                }
+                if (!overlayController.isOverlayActuallyAttached()) {
+                    triggerScan(forceExpand = false, ignoreCache = false)
+                }
+            }
+        }
+    }
+
     private fun leaveTargetApp() {
         activeTargetPackage = null
         debounceJob?.cancel()
+        leaveGraceJob?.cancel()
+        watchdogJob?.cancel()
         translateJob?.cancel()
         polishJob?.cancel()
         inFlightIds.clear()
@@ -179,19 +248,27 @@ class TinderAccessibilityService : AccessibilityService() {
 
     private fun triggerScan(forceExpand: Boolean, ignoreCache: Boolean) {
         val targetPkg = activeTargetPackage ?: return
-        val targetRoot = findTargetRootNode(targetPkg) ?: return
+        val settings = settingsStore.loadSettings()
+        val targetRoot = findTargetRootNode(targetPkg)
+        if (targetRoot == null) {
+            if (!overlayController.isOverlayActuallyAttached()) {
+                overlayController.showCollapsedPill(settings.language, hasUnread = false)
+            }
+            return
+        }
 
         val dm = resources.displayMetrics
         val screenWidth = dm.widthPixels
         val screenHeight = dm.heightPixels
-        val nodes = collectScreenNodes(targetRoot)
+        val nodes = collectScreenNodes(targetRoot, screenWidth, screenHeight)
 
-        if (!ChatMessageParser.isChatScreen(nodes, screenWidth, screenHeight)) {
-            overlayController.hideAll()
+        val isChat = ChatMessageParser.isChatScreen(nodes, screenWidth, screenHeight)
+        if (!isChat && !forceExpand && !polishState.visible) {
+            // Keep the subtle edge pill available inside Tinder so the bubble never vanishes
+            overlayController.showCollapsedPill(settings.language, hasUnread = false)
             return
         }
 
-        val settings = settingsStore.loadSettings()
         if (lastLanguage != settings.language) {
             lastLanguage = settings.language
             triggerTracker.resetSession()
@@ -201,7 +278,8 @@ class TinderAccessibilityService : AccessibilityService() {
             nodes = nodes,
             screenWidth = screenWidth,
             screenHeight = screenHeight,
-            maxMessages = (settings.maxMessages + 4).coerceAtMost(12)
+            maxMessages = (settings.maxMessages + 4).coerceAtMost(12),
+            allowFallbackViewport = forceExpand
         )
 
         val decision = triggerTracker.evaluate(
@@ -488,15 +566,16 @@ class TinderAccessibilityService : AccessibilityService() {
         val rect = Rect()
         var bestNode: AccessibilityNodeInfo? = null
         var bestTop = -1
+        var visited = 0
 
         fun search(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > 30) return
-            if (!node.isVisibleToUser) return
+            if (node == null || depth > MAX_TREE_DEPTH || visited >= MAX_VISITED_NODES) return
+            visited++
 
             val cls = node.className?.toString().orEmpty()
             if (node.isEditable || cls.endsWith("EditText")) {
                 node.getBoundsInScreen(rect)
-                if (rect.top >= minTop && rect.height() > 0 && rect.top >= bestTop) {
+                if (rect.top >= minTop && rect.height() > 0 && rect.bottom <= screenHeight + 100 && rect.top >= bestTop) {
                     bestNode = node
                     bestTop = rect.top
                 }
@@ -523,38 +602,52 @@ class TinderAccessibilityService : AccessibilityService() {
         return text
     }
 
-    private fun collectScreenNodes(root: AccessibilityNodeInfo): List<ScreenNode> {
+    private fun collectScreenNodes(
+        root: AccessibilityNodeInfo,
+        screenWidth: Int,
+        screenHeight: Int
+    ): List<ScreenNode> {
         val result = ArrayList<ScreenNode>(64)
         val rect = Rect()
+        var visited = 0
 
         fun visit(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > 32) return
-            if (!node.isVisibleToUser) return
+            if (node == null || depth > MAX_TREE_DEPTH || visited >= MAX_VISITED_NODES) return
+            visited++
 
             node.getBoundsInScreen(rect)
-            val text = node.text?.toString().orEmpty()
-            val cls = node.className?.toString().orEmpty()
-            val fallbackText = when {
-                text.isNotEmpty() -> text
-                node.isEditable -> node.hintText?.toString().orEmpty()
-                cls.endsWith("TextView") -> node.contentDescription?.toString().orEmpty()
-                else -> ""
-            }
+            val onScreen = rect.width() > 0 &&
+                rect.height() > 0 &&
+                rect.right > 0 &&
+                rect.bottom > 0 &&
+                rect.left < screenWidth &&
+                rect.top < screenHeight
 
-            if (fallbackText.isNotEmpty() || node.isEditable) {
-                result.add(
-                    ScreenNode(
-                        text = fallbackText,
-                        className = cls,
-                        viewId = node.viewIdResourceName.orEmpty(),
-                        left = rect.left,
-                        top = rect.top,
-                        right = rect.right,
-                        bottom = rect.bottom,
-                        isEditable = node.isEditable,
-                        isClickable = node.isClickable
+            if (onScreen) {
+                val text = node.text?.toString().orEmpty()
+                val cls = node.className?.toString().orEmpty()
+                val fallbackText = when {
+                    text.isNotEmpty() -> text
+                    node.isEditable -> node.hintText?.toString().orEmpty()
+                    cls.endsWith("TextView") -> node.contentDescription?.toString().orEmpty()
+                    else -> ""
+                }
+
+                if (fallbackText.isNotEmpty() || node.isEditable) {
+                    result.add(
+                        ScreenNode(
+                            text = fallbackText,
+                            className = cls,
+                            viewId = node.viewIdResourceName.orEmpty(),
+                            left = rect.left,
+                            top = rect.top,
+                            right = rect.right,
+                            bottom = rect.bottom,
+                            isEditable = node.isEditable,
+                            isClickable = node.isClickable
+                        )
                     )
-                )
+                }
             }
 
             val childCount = node.childCount
@@ -572,7 +665,11 @@ class TinderAccessibilityService : AccessibilityService() {
 
     companion object {
         const val TINDER_PACKAGE = "com.tinder"
-        private const val SCAN_DEBOUNCE_MS = 380L
+        private const val SCAN_DEBOUNCE_MS = 320L
+        private const val LEAVE_GRACE_MS = 650L
+        private const val WATCHDOG_INTERVAL_MS = 1800L
+        private const val MAX_TREE_DEPTH = 80
+        private const val MAX_VISITED_NODES = 1500
 
         private val PLACEHOLDER_STRINGS = setOf(
             "type a message", "type a message...", "say something nice",

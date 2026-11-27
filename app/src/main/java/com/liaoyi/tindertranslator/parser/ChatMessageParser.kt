@@ -43,12 +43,17 @@ object ChatMessageParser {
     )
 
     private val CHAT_INPUT_VIEW_ID_HINTS = listOf(
-        "chat_input", "message_input", "compose", "input_message", "chat_edit", "msg_input"
+        "chat_input", "message_input", "compose", "input_message", "chat_edit",
+        "msg_input", "chat_text", "input_box", "send_button", "chat_send"
     )
 
     private val CHAT_PLACEHOLDER_HINTS = listOf(
-        "type a message", "say something nice", "输入消息", "发消息"
+        "type a message", "send a message", "write a message", "say something nice",
+        "message...", "输入消息", "发消息", "发条消息", "说点什么", "写点什么",
+        "พิมพ์ข้อความ", "ส่งข้อความ"
     )
+
+    private val CHAT_ACTION_HINTS = setOf("send", "gif", "gifs", "发送", "ส่ง")
 
     private val HEADER_VIEW_ID_HINTS = listOf(
         "toolbar", "action_bar", "header", "match_name", "chat_title", "mock_header", "btnback", "btnsimulate"
@@ -65,16 +70,20 @@ object ChatMessageParser {
 
     /**
      * Extracts chat messages visible on screen, ordered top-to-bottom.
+     * When [allowFallbackViewport] is true (manual user tap on bubble), extracts visible
+     * foreign text even if the chat input box was temporarily not found.
      */
     fun extractMessages(
         nodes: List<ScreenNode>,
         screenWidth: Int,
         screenHeight: Int,
-        maxMessages: Int = 8
+        maxMessages: Int = 8,
+        allowFallbackViewport: Boolean = false
     ): List<ChatMessage> {
         if (nodes.isEmpty() || screenWidth <= 0 || screenHeight <= 0) return emptyList()
 
-        val composerTop = findComposerTopY(nodes, screenHeight) ?: return emptyList()
+        val composerTop = findComposerTopY(nodes, screenHeight)
+            ?: if (allowFallbackViewport) (screenHeight * 0.88f).toInt() else return emptyList()
         val headerBottom = (screenHeight * 0.085f).toInt()
         val maxMessageBottom = composerTop + 6
 
@@ -150,22 +159,29 @@ object ChatMessageParser {
 
     internal fun findComposerTopY(nodes: List<ScreenNode>, screenHeight: Int): Int? {
         val minComposerTop = (screenHeight * 0.22f).toInt()
+        val bottomActionTop = (screenHeight * 0.45f).toInt()
         var bestTop: Int? = null
+        var actionBarTop: Int? = null
 
         for (node in nodes) {
+            if (node.height <= 0) continue
             val looksEditable = node.isEditable || node.className.endsWith("EditText")
             val viewIdLower = node.viewId.lowercase()
             val textLower = node.text.trim().lowercase()
             val matchesHint = CHAT_INPUT_VIEW_ID_HINTS.any { viewIdLower.contains(it) } ||
                 CHAT_PLACEHOLDER_HINTS.any { textLower == it || textLower.startsWith(it) }
 
-            if ((looksEditable || matchesHint) && node.top >= minComposerTop && node.height > 0) {
+            if ((looksEditable || matchesHint) && node.top >= minComposerTop) {
                 if (bestTop == null || node.top < bestTop) {
                     bestTop = node.top
                 }
+            } else if (textLower in CHAT_ACTION_HINTS && node.top >= bottomActionTop) {
+                if (actionBarTop == null || node.top < actionBarTop) {
+                    actionBarTop = node.top
+                }
             }
         }
-        return bestTop
+        return bestTop ?: actionBarTop
     }
 
     private fun isUiNoise(text: String, node: ScreenNode): Boolean {
